@@ -1,0 +1,93 @@
+To run your script on the HPC without a system-wide Anaconda/Miniconda module, you need to:
+
+Step-by-Step HPC Setup
+Install Miniconda (if not already installed) on the login node.
+
+Bash
+
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+Install to /home/u8022291/miniconda3 (your home directory).
+
+Create Your Conda Environment (fc_env).
+source ~/miniconda3/bin/activate
+conda env create -f /home/u8022291/Automating_Workflow/environment.yml
+conda activate fc_env
+
+#check rclone version
+rclone version
+
+
+
+
+
+#!/bin/bash
+#PBS -A hpcusers
+#PBS -N fc_pipeline_MODIS
+#PBS -l nodes=1:ppn=1
+#PBS -l walltime=12:00:00
+#PBS -l mem=64gb
+#PBS -j oe
+#PBS -o pipelineMODIS.log
+
+# Set the base directory for your workflow on the HPC
+WORKFLOW_DIR="/sandisk1/u8022291/MODIS_FC"
+
+# --- HPC Proxy Configuration (as provided by UniSQ HPC Support) ---
+# These variables enable internet access through the UniSQ web proxy.
+export ftp_proxy="http://139.86.9.82:8080/"
+export http_proxy="http://139.86.9.82:8080/"
+export https_proxy="http://139.86.9.82:8080/"
+export no_proxy="localhost, 127.0.0.1"
+echo "Proxy settings configured for job."
+# --- End Proxy Configuration ---
+
+# --- Rclone Configuration and Data Retrieval for MODIS ---
+# Define variables for your rclone remote and paths
+RCLONE_CONFIG_NAME="gdrive" # The name you gave your rclone Google Drive remote during setup
+# The source path on Google Drive, relative to the root ("My Drive")
+RCLONE_SOURCE_PATH="GEE_MODIS_Exports_DEU_Daily" # Updated for MODIS source
+# The destination path on your HPC where the files will be stored
+# Assuming MODIS_FC_Model.py expects input directly in WORKFLOW_DIR or a subdir like "input_data"
+# I'll create a subdirectory 'MODIS_Daily_Composites' for clarity.
+HPC_DESTINATION_PATH="${WORKFLOW_DIR}/MODIS_Daily_Composites"
+
+echo "Ensuring destination directory exists: ${HPC_DESTINATION_PATH}"
+mkdir -p "${HPC_DESTINATION_PATH}"
+
+echo "Starting MODIS data retrieval from Google Drive using rclone..."
+# Use rclone to copy files from Google Drive to the HPC's local storage
+rclone copy "$RCLONE_CONFIG_NAME:$RCLONE_SOURCE_PATH" "$HPC_DESTINATION_PATH" --progress --drive-skip-gdocs --copy-links
+
+# Check if the rclone command was successful
+if [ $? -ne 0 ]; then
+  echo "ERROR: MODIS data retrieval from Google Drive failed. Exiting pipeline."
+  exit 1
+fi
+echo "MODIS data retrieval completed successfully."
+# --- End Rclone Configuration and Data Retrieval ---
+
+# --- Conda Environment Activation ---
+source /home/u8022291/miniconda3/etc/profile.d/conda.sh
+conda activate fc_env
+
+# Change to the workflow directory
+cd "$WORKFLOW_DIR" || { echo "ERROR: Cannot change to WORKFLOW_DIR: $WORKFLOW_DIR. Exiting."; exit 1; }
+
+echo "Starting MODIS Fractional Cover prediction..."
+# Execute the Fractional Cover prediction script.
+# Ensure MODIS_FC_Model.py is designed to read from HPC_DESTINATION_PATH.
+# You might need to update MODIS_FC_Model.py to point to ${WORKFLOW_DIR}/MODIS_Daily_Composites
+/home/u8022291/miniconda3/envs/fc_env/bin/python MODIS_FC_Model.py
+
+# Check if the FC script ran successfully
+if [ $? -ne 0 ]; then
+    echo "ERROR: MODIS Fractional Cover prediction failed. Check MODIS_FC_Model.py output for details."
+    exit 1
+fi
+echo "MODIS Fractional Cover prediction completed successfully."
+
+# Deactivate Conda environment (optional, but good practice)
+conda deactivate
+
+echo "MODIS FC pipeline finished successfully."
